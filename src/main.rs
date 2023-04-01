@@ -103,7 +103,9 @@ fn main() -> Result<(), Error> {
                 }
                 if y >= HEIGHT {
                     y = 0;
-                    samples *= 4;
+                    if samples < 1000 {
+                        samples *= 4;
+                    }
                     println!("Starting render with {} samples", samples);
                 }
             }
@@ -121,7 +123,7 @@ enum Material {
     Floor,
 }
 
-pub fn get_color_for_pixel(x: usize, y: usize, samples: u8) -> (u8, u8, u8) {
+pub fn get_color_for_pixel(x: usize, y: usize, samples: u16) -> (u8, u8, u8) {
     let mut r = 0.0;
     let mut g = 0.0;
     let mut b = 0.0;
@@ -137,10 +139,22 @@ pub fn get_color_for_pixel(x: usize, y: usize, samples: u8) -> (u8, u8, u8) {
         b += c.2;
     }
     (
-        (r / samples as f32 * 255.0) as u8,
-        (g / samples as f32 * 255.0) as u8,
-        (b / samples as f32 * 255.0) as u8,
+        ((r / samples as f32).powf(1.0 / 2.2) * 255.0) as u8,
+        ((g / samples as f32).powf(1.0 / 2.2) * 255.0) as u8,
+        ((b / samples as f32).powf(1.0 / 2.2) * 255.0) as u8,
     )
+}
+
+fn get_random_unit_vector() -> Vec3 {
+    loop {
+        let x = fastrand::f32() * 2.0 - 1.0;
+        let y = fastrand::f32() * 2.0 - 1.0;
+        let z = fastrand::f32() * 2.0 - 1.0;
+        let v = Vec3::new(x, y, z);
+        if v.length_squared() <= 1.0 {
+            return v.normalize();
+        }
+    }
 }
 
 fn get_color_for_camera_space(x: f32, y: f32) -> (f32, f32, f32) {
@@ -150,7 +164,7 @@ fn get_color_for_camera_space(x: f32, y: f32) -> (f32, f32, f32) {
     let dx = look_vec.cross(up_vec).normalize();
     let dy = dx.cross(look_vec).normalize();
     let fov_factor = 0.2;
-    get_color_for_ray(cam_pos, look_vec + (x * dx + y * dy) * fov_factor)
+    get_color_for_ray(cam_pos, look_vec + (x * dx + y * dy) * fov_factor, 2)
 }
 
 fn get_collision_for_ray(start: Vec3, dir: Vec3) -> Option<(Vec3, Material)> {
@@ -168,7 +182,7 @@ fn get_collision_for_ray(start: Vec3, dir: Vec3) -> Option<(Vec3, Material)> {
     return None;
 }
 
-fn get_color_for_ray(start: Vec3, dir: Vec3) -> (f32, f32, f32) {
+fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> (f32, f32, f32) {
     let sun_pos = Vec3::new(20.0, 20.0, 20.0);
     let fill_pos = Vec3::new(1.0, 1.0, 50.0);
     match get_collision_for_ray(start, dir) {
@@ -180,11 +194,11 @@ fn get_color_for_ray(start: Vec3, dir: Vec3) -> (f32, f32, f32) {
             let nz = sdf(pos + Vec3::new(0.0, 0.0, EPSILON)).0
                 - sdf(pos - Vec3::new(0.0, 0.0, EPSILON)).0;
             let normal = Vec3::new(nx, ny, nz).normalize();
-            let albedo = match m {
-                Material::Sphere => (0.2, 0.2, 0.2),
+            let (diffuse_albedo, shiny_albedo) = match m {
+                Material::Sphere => ((0.2, 0.1, 0.0), (0.0, 0.0, 0.0)),
                 Material::Floor => {
                     let check = ((pos.x * 2.0).floor() + (pos.y * 2.0).floor()).rem_euclid(2.0);
-                    (0.0, check * 0.25, 0.25)
+                    ((0.0, check * 0.05, 0.05), (0.1, 0.1, 0.1))
                 }
             };
             let shadow_ray_dir = (sun_pos - pos).normalize();
@@ -192,12 +206,38 @@ fn get_color_for_ray(start: Vec3, dir: Vec3) -> (f32, f32, f32) {
             let s = if obscured {
                 0.0
             } else {
-                (sun_pos - pos).normalize().dot(normal).max(0.0) * 1.5
+                (sun_pos - pos).normalize().dot(normal).max(0.0) * 0.8
             };
-            let f = (fill_pos - pos).normalize().dot(normal).max(0.0) * 0.3;
-            (albedo.0 * (s + f), albedo.1 * (s + f), albedo.2 * (s + f))
+            let f = (fill_pos - pos).normalize().dot(normal).max(0.0) * 0.1;
+            let diffuse = if bounces > 0 {
+                let mut bd = (normal * 1.001 + get_random_unit_vector()).normalize();
+                if bd.dot(normal) < 0.0 {
+                    bd *= -1.0;
+                }
+                get_color_for_ray(pos + normal * EPSILON1, bd, bounces - 1)
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+            let ex = if bounces > 0
+                && (shiny_albedo.0 > 0.0 || shiny_albedo.1 > 0.0 || shiny_albedo.2 > 0.0)
+            {
+                let reflected_dir = dir + -2.0 * normal * dir.dot(normal);
+                let c = get_color_for_ray(pos + normal * EPSILON1, reflected_dir, bounces - 1);
+                (
+                    c.0 * shiny_albedo.0,
+                    c.1 * shiny_albedo.1,
+                    c.2 * shiny_albedo.2,
+                )
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+            (
+                diffuse_albedo.0 * (s + f + diffuse.0) + ex.0,
+                diffuse_albedo.1 * (s + f + diffuse.1) + ex.1,
+                diffuse_albedo.2 * (s + f + diffuse.2) + ex.2,
+            )
         }
-        None => (0.5, 0.5, 1.0),
+        None => (0.0, 0.0, 0.0),
     }
 }
 
