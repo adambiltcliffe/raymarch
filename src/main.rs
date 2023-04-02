@@ -164,7 +164,12 @@ fn get_color_for_camera_space(x: f32, y: f32) -> (f32, f32, f32) {
     let dx = look_vec.cross(up_vec).normalize();
     let dy = dx.cross(look_vec).normalize();
     let fov_factor = 0.2;
-    get_color_for_ray(cam_pos, look_vec + (x * dx + y * dy) * fov_factor, 2)
+    let aperture = 0.2;
+    let focal_length = 18.0;
+    let focal_point = cam_pos + focal_length * (look_vec + (x * dx + y * dy) * fov_factor);
+    let lens_point =
+        cam_pos + aperture * (dx * (fastrand::f32() - 0.5) + dy * (fastrand::f32() - 0.5));
+    get_color_for_ray(lens_point, focal_point - lens_point, 2)
 }
 
 fn get_collision_for_ray(start: Vec3, dir: Vec3) -> Option<(Vec3, Material)> {
