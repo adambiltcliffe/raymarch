@@ -118,7 +118,8 @@ fn main() -> Result<(), Error> {
 // below here is all the stuff for actually making the image
 
 enum Material {
-    Sphere,
+    Dice,
+    Inlay,
     Floor,
 }
 
@@ -200,17 +201,19 @@ fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> Vec3 {
                 - sdf(pos - Vec3::new(0.0, 0.0, EPSILON)).0;
             let normal = Vec3::new(nx, ny, nz).normalize();
             let (diffuse_albedo, shiny_albedo, spec_albedo) = match m {
-                Material::Sphere => (
-                    Vec3::new(0.2, 0.1, 0.0),
+                Material::Dice => (
+                    Vec3::new(0.3, 0.0, 0.0),
                     Vec3::ZERO,
-                    Vec3::new(1.0, 1.0, 1.0),
+                    Vec3::new(1.0, 0.5, 0.5),
                 ),
+                Material::Inlay => (Vec3::new(0.3, 0.3, 0.3), Vec3::ZERO, Vec3::ONE),
                 Material::Floor => {
-                    let check = ((pos.x * 2.0).floor() + (pos.y * 2.0).floor()).rem_euclid(2.0);
+                    let check =
+                        ((pos.x * 2.0).floor() + (pos.y * 2.0).floor()).rem_euclid(2.0) + 1.0;
                     (
-                        Vec3::new(0.0, check * 0.05, 0.05),
+                        Vec3::new(check * 0.05, check * 0.06, 0.05),
                         Vec3::new(0.1, 0.1, 0.1),
-                        Vec3::ONE,
+                        Vec3::ZERO,
                     )
                 }
             };
@@ -220,7 +223,7 @@ fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> Vec3 {
                 (Vec3::ZERO, Vec3::ZERO)
             } else {
                 let dot = (sun_pos - pos).normalize().dot(normal).max(0.0);
-                (Vec3::ONE * dot * 0.8, spec_albedo * dot.powf(30.0))
+                (Vec3::ONE * dot * 0.8, spec_albedo * dot.powf(45.0))
             };
             let f = Vec3::ONE * (fill_pos - pos).normalize().dot(normal).max(0.0) * 0.1;
             let diffuse = if bounces > 0 {
@@ -246,12 +249,39 @@ fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> Vec3 {
 }
 
 fn sdf(p: Vec3) -> (f32, Material) {
+    let cube_size = 0.35;
+    let bevel = 0.1;
+    // c is the co-ordinates of the centre of the nearest sphere
     let c = Vec3::new((p.x / 2.0).round() * 2.0, (p.y / 2.0).round() * 2.0, 0.0);
-    let sd = (p - c).length() - 0.7;
-    let fd = p.z + 0.7;
+    // position relative to cube centre
+    let prcc = (p - c).abs();
+    let sd;
+    if prcc.max_element() < cube_size {
+        // inside cube
+        sd = prcc.max_element() - cube_size - bevel;
+    } else {
+        // closest position on cube
+        let cpc = prcc.min(Vec3::ONE * cube_size);
+        sd = (prcc - cpc).length() - bevel;
+    }
+    let face_ctr = if prcc.max_element() == prcc.x {
+        Vec3::new(cube_size + bevel + 0.09, 0.0, 0.0)
+    } else if prcc.max_element() == prcc.y {
+        Vec3::new(0.0, cube_size + bevel + 0.09, 0.0)
+    } else {
+        Vec3::new(0.0, 0.0, cube_size + bevel + 0.09)
+    };
+    let hd = (prcc - face_ctr).length() - 0.12;
+    let sd = sd.max(-hd);
+    let m = if sd == -hd {
+        Material::Inlay
+    } else {
+        Material::Dice
+    };
+    let fd = p.z + cube_size + bevel;
     if fd < sd {
         (fd, Material::Floor)
     } else {
-        (sd, Material::Sphere)
+        (sd, m)
     }
 }
