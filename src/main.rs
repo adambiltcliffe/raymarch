@@ -14,7 +14,6 @@ const MAX_DIST: f32 = 50.0;
 const EPSILON: f32 = 0.001;
 const EPSILON1: f32 = 0.0011;
 
-/// Representation of the application state. In this example, a box will bounce around the screen.
 struct ImageData {
     pixel_data: [u8; WIDTH * HEIGHT * 4],
 }
@@ -169,7 +168,8 @@ fn get_color_for_camera_space(x: f32, y: f32) -> (f32, f32, f32) {
     let focal_point = cam_pos + focal_length * (look_vec + (x * dx + y * dy) * fov_factor);
     let lens_point =
         cam_pos + aperture * (dx * (fastrand::f32() - 0.5) + dy * (fastrand::f32() - 0.5));
-    get_color_for_ray(lens_point, focal_point - lens_point, 2)
+    let c = get_color_for_ray(lens_point, focal_point - lens_point, 2);
+    (c.x, c.y, c.z)
 }
 
 fn get_collision_for_ray(start: Vec3, dir: Vec3) -> Option<(Vec3, Material)> {
@@ -187,7 +187,7 @@ fn get_collision_for_ray(start: Vec3, dir: Vec3) -> Option<(Vec3, Material)> {
     return None;
 }
 
-fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> (f32, f32, f32) {
+fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> Vec3 {
     let sun_pos = Vec3::new(20.0, 20.0, 20.0);
     let fill_pos = Vec3::new(1.0, 1.0, 50.0);
     match get_collision_for_ray(start, dir) {
@@ -199,21 +199,30 @@ fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> (f32, f32, f32) {
             let nz = sdf(pos + Vec3::new(0.0, 0.0, EPSILON)).0
                 - sdf(pos - Vec3::new(0.0, 0.0, EPSILON)).0;
             let normal = Vec3::new(nx, ny, nz).normalize();
-            let (diffuse_albedo, shiny_albedo) = match m {
-                Material::Sphere => ((0.2, 0.1, 0.0), (0.0, 0.0, 0.0)),
+            let (diffuse_albedo, shiny_albedo, spec_albedo) = match m {
+                Material::Sphere => (
+                    Vec3::new(0.2, 0.1, 0.0),
+                    Vec3::ZERO,
+                    Vec3::new(1.0, 1.0, 1.0),
+                ),
                 Material::Floor => {
                     let check = ((pos.x * 2.0).floor() + (pos.y * 2.0).floor()).rem_euclid(2.0);
-                    ((0.0, check * 0.05, 0.05), (0.1, 0.1, 0.1))
+                    (
+                        Vec3::new(0.0, check * 0.05, 0.05),
+                        Vec3::new(0.1, 0.1, 0.1),
+                        Vec3::ONE,
+                    )
                 }
             };
             let shadow_ray_dir = (sun_pos - pos).normalize();
             let obscured = get_collision_for_ray(pos + normal * EPSILON1, shadow_ray_dir).is_some();
-            let s = if obscured {
-                0.0
+            let (s, spec) = if obscured {
+                (Vec3::ZERO, Vec3::ZERO)
             } else {
-                (sun_pos - pos).normalize().dot(normal).max(0.0) * 0.8
+                let dot = (sun_pos - pos).normalize().dot(normal).max(0.0);
+                (Vec3::ONE * dot * 0.8, spec_albedo * dot.powf(30.0))
             };
-            let f = (fill_pos - pos).normalize().dot(normal).max(0.0) * 0.1;
+            let f = Vec3::ONE * (fill_pos - pos).normalize().dot(normal).max(0.0) * 0.1;
             let diffuse = if bounces > 0 {
                 let mut bd = (normal * 1.001 + get_random_unit_vector()).normalize();
                 if bd.dot(normal) < 0.0 {
@@ -221,28 +230,18 @@ fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> (f32, f32, f32) {
                 }
                 get_color_for_ray(pos + normal * EPSILON1, bd, bounces - 1)
             } else {
-                (0.0, 0.0, 0.0)
+                Vec3::ZERO
             };
-            let ex = if bounces > 0
-                && (shiny_albedo.0 > 0.0 || shiny_albedo.1 > 0.0 || shiny_albedo.2 > 0.0)
-            {
+            let ex = if bounces > 0 && (shiny_albedo.length_squared() > 0.0) {
                 let reflected_dir = dir + -2.0 * normal * dir.dot(normal);
                 let c = get_color_for_ray(pos + normal * EPSILON1, reflected_dir, bounces - 1);
-                (
-                    c.0 * shiny_albedo.0,
-                    c.1 * shiny_albedo.1,
-                    c.2 * shiny_albedo.2,
-                )
+                c * shiny_albedo
             } else {
-                (0.0, 0.0, 0.0)
+                Vec3::ZERO
             };
-            (
-                diffuse_albedo.0 * (s + f + diffuse.0) + ex.0,
-                diffuse_albedo.1 * (s + f + diffuse.1) + ex.1,
-                diffuse_albedo.2 * (s + f + diffuse.2) + ex.2,
-            )
+            spec + (Vec3::ONE - spec) * (diffuse_albedo * (s + f + diffuse) + ex)
         }
-        None => (0.0, 0.0, 0.0),
+        None => Vec3::ZERO,
     }
 }
 
