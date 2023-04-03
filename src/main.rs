@@ -1,4 +1,4 @@
-use glam::Vec3;
+use glam::{Vec3, Vec3Swizzles};
 use pixels::{Error, Pixels, SurfaceTexture};
 use std::time::Instant;
 use winit::dpi::LogicalSize;
@@ -251,7 +251,19 @@ fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> Vec3 {
 fn sdf(p: Vec3) -> (f32, Material) {
     let cube_size = 0.35;
     let bevel = 0.1;
+    let spot_spc = 0.22;
     // c is the co-ordinates of the centre of the nearest sphere
+    let ix = (p.x / 2.0).round() as u32;
+    let iy = (p.y / 2.0).round() as u32;
+    let rnd = ix
+        .wrapping_mul(1664525)
+        .wrapping_add(1013904223 + iy)
+        .wrapping_mul(1664525)
+        .wrapping_add(1013904223);
+    // bits of rnd are used as follows:
+    // 0..2: face rotation flag on 3 faces
+    // 3..5: flag to swap n for 7-n on 3 faces
+    // 6..31: select one of six permutations for visible faces
     let c = Vec3::new((p.x / 2.0).round() * 2.0, (p.y / 2.0).round() * 2.0, 0.0);
     // position relative to cube centre
     let prcc = (p - c).abs();
@@ -264,14 +276,71 @@ fn sdf(p: Vec3) -> (f32, Material) {
         let cpc = prcc.min(Vec3::ONE * cube_size);
         sd = (prcc - cpc).length() - bevel;
     }
-    let face_ctr = if prcc.max_element() == prcc.x {
-        Vec3::new(cube_size + bevel + 0.09, 0.0, 0.0)
+    let (face_ctr, u, v, sprcc, idx) = if prcc.max_element() == prcc.x {
+        (
+            Vec3::new(cube_size + bevel + 0.09, 0.0, 0.0),
+            Vec3::new(0.0, spot_spc, 0.0),
+            Vec3::new(0.0, 0.0, spot_spc),
+            (p - c),
+            0,
+        )
     } else if prcc.max_element() == prcc.y {
-        Vec3::new(0.0, cube_size + bevel + 0.09, 0.0)
+        (
+            Vec3::new(0.0, cube_size + bevel + 0.09, 0.0),
+            Vec3::new(spot_spc, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, spot_spc),
+            -(p - c),
+            1,
+        )
     } else {
-        Vec3::new(0.0, 0.0, cube_size + bevel + 0.09)
+        (
+            Vec3::new(0.0, 0.0, cube_size + bevel + 0.09),
+            Vec3::new(spot_spc, 0.0, 0.0),
+            Vec3::new(0.0, spot_spc, 0.0),
+            (p - c),
+            2,
+        )
     };
-    let hd = (prcc - face_ctr).length() - 0.12;
+    let (u, v) = if rnd & (1 << idx) == 0 {
+        (u, v)
+    } else {
+        (v, -u)
+    };
+    let num_spots = if rnd & (8 << idx) == 0 {
+        idx + 1
+    } else {
+        6 - idx
+    };
+    let hd = match num_spots {
+        1 => (sprcc - face_ctr).length(),
+        2 => (sprcc - face_ctr - u - v)
+            .length()
+            .min((sprcc - face_ctr + u + v).length()),
+        3 => (sprcc - face_ctr).length().min(
+            (sprcc - face_ctr - u - v)
+                .length()
+                .min((sprcc - face_ctr + u + v).length()),
+        ),
+        4 => (sprcc - face_ctr - u - v)
+            .length()
+            .min((sprcc - face_ctr + u + v).length())
+            .min((sprcc - face_ctr + u - v).length())
+            .min((sprcc - face_ctr - u + v).length()),
+        5 => (sprcc - face_ctr).length().min(
+            (sprcc - face_ctr - u - v)
+                .length()
+                .min((sprcc - face_ctr + u + v).length())
+                .min((sprcc - face_ctr + u - v).length())
+                .min((sprcc - face_ctr - u + v).length()),
+        ),
+        _ => (sprcc - face_ctr - u - v)
+            .length()
+            .min((sprcc - face_ctr + u + v).length())
+            .min((sprcc - face_ctr + u - v).length())
+            .min((sprcc - face_ctr - u + v).length())
+            .min((sprcc - face_ctr + v).length())
+            .min((sprcc - face_ctr - v).length()),
+    } - 0.12;
     let sd = sd.max(-hd);
     let m = if sd == -hd {
         Material::Inlay
