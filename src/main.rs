@@ -189,7 +189,7 @@ fn get_collision_for_ray(start: Vec3, dir: Vec3) -> Option<(Vec3, Material)> {
 }
 
 fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> Vec3 {
-    let sun_pos = Vec3::new(20.0, 20.0, 20.0);
+    let sun_pos = Vec3::new(7.0, 9.0, 15.0);
     let fill_pos = Vec3::new(1.0, 1.0, 50.0);
     match get_collision_for_ray(start, dir) {
         Some((pos, m)) => {
@@ -212,7 +212,7 @@ fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> Vec3 {
                         ((pos.x * 2.0).floor() + (pos.y * 2.0).floor()).rem_euclid(2.0) + 1.0;
                     (
                         Vec3::new(check * 0.05, check * 0.06, 0.05),
-                        Vec3::new(0.1, 0.1, 0.1),
+                        Vec3::new(0.4, 0.4, 0.4),
                         Vec3::ZERO,
                     )
                 }
@@ -225,7 +225,7 @@ fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> Vec3 {
                 let dot = (sun_pos - pos).normalize().dot(normal).max(0.0);
                 (Vec3::ONE * dot * 0.8, spec_albedo * dot.powf(45.0))
             };
-            let f = Vec3::ONE * (fill_pos - pos).normalize().dot(normal).max(0.0) * 0.1;
+            let f = Vec3::ONE * (fill_pos - pos).normalize().dot(normal).max(0.0) * 0.01;
             let diffuse = if bounces > 0 {
                 let mut bd = (normal * 1.001 + get_random_unit_vector()).normalize();
                 if bd.dot(normal) < 0.0 {
@@ -248,98 +248,113 @@ fn get_color_for_ray(start: Vec3, dir: Vec3, bounces: u8) -> Vec3 {
     }
 }
 
-fn sdf(p: Vec3) -> (f32, Material) {
-    let cube_size = 0.35;
-    let bevel = 0.1;
-    let spot_spc = 0.22;
-    // c is the co-ordinates of the centre of the nearest sphere
-    let ix = (p.x / 2.0).round() as u32;
-    let iy = (p.y / 2.0).round() as u32;
-    let rnd = ix
-        .wrapping_mul(1664525)
+const CUBE_SIZE: f32 = 0.35;
+const BEVEL: f32 = 0.1;
+const SPOT_SPC: f32 = 0.22;
+const SPOT_DEPTH: f32 = 0.09;
+const ONE_SPOT: [Vec3; 1] = [Vec3::new(CUBE_SIZE + BEVEL + SPOT_DEPTH, 0.0, 0.0)];
+const TWO_SPOTS: [Vec3; 2] = [
+    Vec3::new(SPOT_SPC, CUBE_SIZE + BEVEL + SPOT_DEPTH, -SPOT_SPC),
+    Vec3::new(-SPOT_SPC, CUBE_SIZE + BEVEL + SPOT_DEPTH, SPOT_SPC),
+];
+const THREE_SPOTS: [Vec3; 3] = [
+    Vec3::new(0.0, 0.0, CUBE_SIZE + BEVEL + SPOT_DEPTH),
+    Vec3::new(SPOT_SPC, -SPOT_SPC, CUBE_SIZE + BEVEL + SPOT_DEPTH),
+    Vec3::new(-SPOT_SPC, SPOT_SPC, CUBE_SIZE + BEVEL + SPOT_DEPTH),
+];
+const FOUR_SPOTS: [Vec3; 4] = [
+    Vec3::new(SPOT_SPC, SPOT_SPC, -CUBE_SIZE - BEVEL - SPOT_DEPTH),
+    Vec3::new(SPOT_SPC, -SPOT_SPC, -CUBE_SIZE - BEVEL - SPOT_DEPTH),
+    Vec3::new(-SPOT_SPC, SPOT_SPC, -CUBE_SIZE - BEVEL - SPOT_DEPTH),
+    Vec3::new(-SPOT_SPC, -SPOT_SPC, -CUBE_SIZE - BEVEL - SPOT_DEPTH),
+];
+const FIVE_SPOTS: [Vec3; 5] = [
+    Vec3::new(0.0, -CUBE_SIZE - BEVEL - SPOT_DEPTH, 0.0),
+    Vec3::new(SPOT_SPC, -CUBE_SIZE - BEVEL - SPOT_DEPTH, SPOT_SPC),
+    Vec3::new(SPOT_SPC, -CUBE_SIZE - BEVEL - SPOT_DEPTH, -SPOT_SPC),
+    Vec3::new(-SPOT_SPC, -CUBE_SIZE - BEVEL - SPOT_DEPTH, SPOT_SPC),
+    Vec3::new(-SPOT_SPC, -CUBE_SIZE - BEVEL - SPOT_DEPTH, -SPOT_SPC),
+];
+const SIX_SPOTS: [Vec3; 6] = [
+    Vec3::new(-CUBE_SIZE - BEVEL - SPOT_DEPTH, SPOT_SPC, SPOT_SPC),
+    Vec3::new(-CUBE_SIZE - BEVEL - SPOT_DEPTH, SPOT_SPC, 0.0),
+    Vec3::new(-CUBE_SIZE - BEVEL - SPOT_DEPTH, SPOT_SPC, -SPOT_SPC),
+    Vec3::new(-CUBE_SIZE - BEVEL - SPOT_DEPTH, -SPOT_SPC, SPOT_SPC),
+    Vec3::new(-CUBE_SIZE - BEVEL - SPOT_DEPTH, -SPOT_SPC, 0.0),
+    Vec3::new(-CUBE_SIZE - BEVEL - SPOT_DEPTH, -SPOT_SPC, -SPOT_SPC),
+];
+
+fn min_from_spots<T: AsRef<[Vec3]>>(p: Vec3, pips: T) -> f32 {
+    pips.as_ref()
+        .iter()
+        .map(|&h| (h - p).length())
+        .fold(f32::MAX, |a, b| a.min(b))
+}
+
+fn rnd(ix: i32, iy: i32) -> u32 {
+    ix.wrapping_mul(1664525)
         .wrapping_add(1013904223 + iy)
         .wrapping_mul(1664525)
-        .wrapping_add(1013904223);
-    // bits of rnd are used as follows:
-    // 0..2: face rotation flag on 3 faces
-    // 3..5: flag to swap n for 7-n on 3 faces
-    // 6..31: select one of six permutations for visible faces
+        .wrapping_add(1013904223) as u32
+        >> 12
+}
+
+fn sdf(p: Vec3) -> (f32, Material) {
+    // c is the co-ordinates of the centre of the nearest sphere
+    let ix = (p.x / 2.0).round() as i32;
+    let iy = (p.y / 2.0).round() as i32;
+    let r = rnd(ix, iy);
+    //println!("{},{} -> {} ({})", ix, iy, r, r % 6);
+    let face = r % 6;
+    let rot = (r / 6) % 4;
     let c = Vec3::new((p.x / 2.0).round() * 2.0, (p.y / 2.0).round() * 2.0, 0.0);
-    // position relative to cube centre
-    let prcc = (p - c).abs();
+    // absolute position relative to cube centre
+    let aprcc = (p - c).abs();
     let sd;
-    if prcc.max_element() < cube_size {
+    if aprcc.max_element() < CUBE_SIZE {
         // inside cube
-        sd = prcc.max_element() - cube_size - bevel;
+        sd = aprcc.max_element() - CUBE_SIZE - BEVEL;
     } else {
         // closest position on cube
-        let cpc = prcc.min(Vec3::ONE * cube_size);
-        sd = (prcc - cpc).length() - bevel;
+        let cpc = aprcc.min(Vec3::ONE * CUBE_SIZE);
+        sd = (aprcc - cpc).length() - BEVEL;
     }
-    let (face_ctr, u, v, sprcc, idx) = if prcc.max_element() == prcc.x {
-        (
-            Vec3::new(cube_size + bevel + 0.09, 0.0, 0.0),
-            Vec3::new(0.0, spot_spc, 0.0),
-            Vec3::new(0.0, 0.0, spot_spc),
-            (p - c),
-            0,
-        )
-    } else if prcc.max_element() == prcc.y {
-        (
-            Vec3::new(0.0, cube_size + bevel + 0.09, 0.0),
-            Vec3::new(spot_spc, 0.0, 0.0),
-            Vec3::new(0.0, 0.0, spot_spc),
-            -(p - c),
-            1,
-        )
-    } else {
-        (
-            Vec3::new(0.0, 0.0, cube_size + bevel + 0.09),
-            Vec3::new(spot_spc, 0.0, 0.0),
-            Vec3::new(0.0, spot_spc, 0.0),
-            (p - c),
-            2,
-        )
+    let fd = p.z + CUBE_SIZE + BEVEL;
+    if fd < sd {
+        return (fd, Material::Floor);
+    }
+    if sd > EPSILON {
+        // fast exit if we're not close to the surface
+        return (sd, Material::Dice);
+    }
+    let prcc = p - c;
+    let prcc = match face {
+        1 => prcc,                                   // one
+        2 => prcc.yxz() * Vec3::new(-1.0, 1.0, 1.0), // two
+        3 => prcc.zyx() * Vec3::new(-1.0, 1.0, 1.0), // three
+        4 => prcc.zyx() * Vec3::new(1.0, 1.0, -1.0), // four
+        5 => prcc.yxz() * Vec3::new(1.0, -1.0, 1.0), // five
+        _ => prcc * Vec3::new(-1.0, 1.0, -1.0),      // six
     };
-    let (u, v) = if rnd & (1 << idx) == 0 {
-        (u, v)
-    } else {
-        (v, -u)
+    let prcc = match rot {
+        0 => prcc,
+        1 => prcc.xzy() * Vec3::new(1.0, -1.0, 1.0),
+        2 => prcc * Vec3::new(1.0, -1.0, -1.0),
+        _ => prcc.xzy() * Vec3::new(1.0, 1.0, -1.0),
     };
-    let num_spots = if rnd & (8 << idx) == 0 {
-        idx + 1
+    let apmax = aprcc.max_element();
+    let hd = if apmax == prcc.x {
+        min_from_spots(prcc, ONE_SPOT)
+    } else if apmax == prcc.y {
+        min_from_spots(prcc, TWO_SPOTS)
+    } else if apmax == prcc.z {
+        min_from_spots(prcc, THREE_SPOTS)
+    } else if apmax == -prcc.z {
+        min_from_spots(prcc, FOUR_SPOTS)
+    } else if apmax == -prcc.y {
+        min_from_spots(prcc, FIVE_SPOTS)
     } else {
-        6 - idx
-    };
-    let hd = match num_spots {
-        1 => (sprcc - face_ctr).length(),
-        2 => (sprcc - face_ctr - u - v)
-            .length()
-            .min((sprcc - face_ctr + u + v).length()),
-        3 => (sprcc - face_ctr).length().min(
-            (sprcc - face_ctr - u - v)
-                .length()
-                .min((sprcc - face_ctr + u + v).length()),
-        ),
-        4 => (sprcc - face_ctr - u - v)
-            .length()
-            .min((sprcc - face_ctr + u + v).length())
-            .min((sprcc - face_ctr + u - v).length())
-            .min((sprcc - face_ctr - u + v).length()),
-        5 => (sprcc - face_ctr).length().min(
-            (sprcc - face_ctr - u - v)
-                .length()
-                .min((sprcc - face_ctr + u + v).length())
-                .min((sprcc - face_ctr + u - v).length())
-                .min((sprcc - face_ctr - u + v).length()),
-        ),
-        _ => (sprcc - face_ctr - u - v)
-            .length()
-            .min((sprcc - face_ctr + u + v).length())
-            .min((sprcc - face_ctr + u - v).length())
-            .min((sprcc - face_ctr - u + v).length())
-            .min((sprcc - face_ctr + v).length())
-            .min((sprcc - face_ctr - v).length()),
+        min_from_spots(prcc, SIX_SPOTS)
     } - 0.12;
     let sd = sd.max(-hd);
     let m = if sd == -hd {
@@ -347,10 +362,5 @@ fn sdf(p: Vec3) -> (f32, Material) {
     } else {
         Material::Dice
     };
-    let fd = p.z + cube_size + bevel;
-    if fd < sd {
-        (fd, Material::Floor)
-    } else {
-        (sd, m)
-    }
+    (sd, m)
 }
